@@ -113,16 +113,16 @@
 </template>
 
 <script setup>
-import { ref, reactive, computed, onMounted, onUnmounted } from 'vue'
+import { ref, reactive, onMounted, onUnmounted } from 'vue'
 import { message } from 'ant-design-vue'
+import Toolbar from './components/Toolbar.vue'
+import Canvas from './components/Canvas.vue'
+import PropertyPanel from './components/PropertyPanel.vue'
 import { 
   UndoOutlined, 
   RedoOutlined, 
   DownloadOutlined 
 } from '@ant-design/icons-vue'
-import Toolbar from './components/Toolbar.vue'
-import Canvas from './components/Canvas.vue'
-import PropertyPanel from './components/PropertyPanel.vue'
 
 // 组件引用
 const canvasComponent = ref(null)
