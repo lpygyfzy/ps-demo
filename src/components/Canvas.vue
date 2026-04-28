@@ -2,7 +2,6 @@
   <div class="canvas-wrapper">
     <!-- 顶部和左侧标尺 -->
     <Ruler 
-      :zoom="canvasState.zoom" 
       :canvasWidth="canvasState.width"
       :canvasHeight="canvasState.height"
     />
@@ -15,44 +14,15 @@
         'tool-select': currentTool === ToolType.SELECT,
         'tool-move': currentTool === ToolType.MOVE
       }"
-      @wheel="handleWheel"
     >
-      <div 
-        class="canvas-viewport"
-        :style="viewportStyle"
-      >
-        <canvas ref="canvasRef"></canvas>
-      </div>
-    </div>
-
-    <!-- 缩放控制 -->
-    <div class="zoom-controls">
-      <a-button-group size="small">
-        <a-button @click="zoomOut" title="缩小">
-          <MinusOutlined />
-        </a-button>
-        <a-button @click="resetZoom" title="重置缩放">
-          {{ Math.round(canvasState.zoom * 100) }}%
-        </a-button>
-        <a-button @click="zoomIn" title="放大">
-          <PlusOutlined />
-        </a-button>
-      </a-button-group>
-      <a-button size="small" @click="fitToScreen" title="适应屏幕">
-        <ExpandOutlined />
-      </a-button>
+      <canvas ref="canvasRef" class="canvas-element"></canvas>
     </div>
   </div>
 </template>
 
 <script setup>
-import { ref, reactive, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
+import { ref, reactive, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import { fabric } from 'fabric'
-import { 
-  MinusOutlined, 
-  PlusOutlined, 
-  ExpandOutlined 
-} from '@ant-design/icons-vue'
 import Ruler from './Ruler.vue'
 import { ToolType } from '../composables/useTools'
 
@@ -83,32 +53,44 @@ let fabricCanvas = null
 
 // 画布状态
 const canvasState = reactive({
-  zoom: 1,
   width: 800,
   height: 600,
   backgroundColor: '#ffffff',
   selectedObject: null
 })
 
-// 视口样式
-const viewportStyle = computed(() => ({
-  transform: `scale(${canvasState.zoom})`,
-  transformOrigin: 'center center',
-  width: `${canvasState.width}px`,
-  height: `${canvasState.height}px`,
-  backgroundColor: canvasState.backgroundColor,
-  boxShadow: '0 4px 12px rgba(0, 0, 0, 0.15)',
-  position: 'absolute',
-  left: '50%',
-  top: '50%',
-  marginLeft: `-${canvasState.width / 2}px`,
-  marginTop: `-${canvasState.height / 2}px`
-}))
-
 // 历史记录
 const history = ref([])
 const historyIndex = ref(-1)
 const isHistoryAction = ref(false)
+
+/**
+ * 获取容器尺寸并设置画布大小
+ */
+const resizeCanvasToContainer = () => {
+  if (!canvasRef.value || !scrollContainer.value) return
+  
+  // 获取 canvas-wrapper 的实际尺寸（不是 canvas-container）
+  const canvasWrapper = scrollContainer.value.parentElement
+  if (!canvasWrapper) return
+  
+  const containerRect = canvasWrapper.getBoundingClientRect()
+  
+  // 画布区域需要减去标尺的尺寸（24px）
+  const canvasWidth = containerRect.width - 24  // 减去垂直标尺宽度
+  const canvasHeight = containerRect.height - 24 // 减去水平标尺高度
+  
+  // 设置画布尺寸
+  canvasState.width = canvasWidth
+  canvasState.height = canvasHeight
+  
+  // 更新 Fabric 画布尺寸
+  if (fabricCanvas) {
+    fabricCanvas.setWidth(canvasWidth)
+    fabricCanvas.setHeight(canvasHeight)
+    fabricCanvas.renderAll()
+  }
+}
 
 /**
  * 初始化 Fabric.js 画布
@@ -117,6 +99,9 @@ const isHistoryAction = ref(false)
  */
 const initCanvas = () => {
   if (!canvasRef.value) return
+  
+  // 先获取容器尺寸
+  resizeCanvasToContainer()
 
   fabricCanvas = new fabric.Canvas(canvasRef.value, {
     width: canvasState.width,
@@ -162,10 +147,47 @@ const initCanvas = () => {
   fabricCanvas.on('mouse:move', handleMouseMove)
   fabricCanvas.on('mouse:up', handleMouseUp)
 
-  // 监听对象移动/旋转/缩放事件，实时更新属性面板
+  // 监听对象移动事件，实时更新属性面板
   fabricCanvas.on('object:moving', (e) => {
     canvasState.selectedObject = e.target
     emit('object-selected', e.target)
+  })
+
+  // 在对象移动结束后检查边界
+  fabricCanvas.on('object:modified', (e) => {
+    const obj = e.target
+    if (!obj) return
+    
+    const canvasWidth = canvasState.width
+    const canvasHeight = canvasState.height
+    
+    // 使用 getBoundingRect 获取对象的实际边界框（考虑所有变换）
+    const boundingRect = obj.getBoundingRect()
+    const objWidth = boundingRect.width
+    const objHeight = boundingRect.height
+    const objLeft = boundingRect.left
+    const objTop = boundingRect.top
+    
+    // 计算边界
+    const maxLeft = canvasWidth - objWidth
+    const maxTop = canvasHeight - objHeight
+    
+    // 限制在边界内
+    const newLeft = Math.max(0, Math.min(objLeft, maxLeft))
+    const newTop = Math.max(0, Math.min(objTop, maxTop))
+    
+    // 计算需要调整的偏移量
+    const deltaX = newLeft - objLeft
+    const deltaY = newTop - objTop
+    
+    // 如果需要调整位置
+    if (Math.round(deltaX) !== 0 || Math.round(deltaY) !== 0) {
+      obj.set({
+        left: obj.left + deltaX,
+        top: obj.top + deltaY
+      })
+      fabricCanvas.renderAll()
+    }
   })
 
   fabricCanvas.on('object:rotating', (e) => {
@@ -390,57 +412,6 @@ const restoreHistory = async () => {
 }
 
 /**
- * 设置画布缩放级别
- * @param {number} zoom - 目标缩放值，范围 0.1 - 5
- */
-const setZoom = (zoom) => {
-  const clampedZoom = Math.max(0.1, Math.min(5, zoom))
-  canvasState.zoom = clampedZoom
-}
-
-/**
- * 放大画布
- * 将缩放级别增加 0.1
- */
-const zoomIn = () => setZoom(canvasState.zoom + 0.1)
-
-/**
- * 缩小画布
- * 将缩放级别减少 0.1
- */
-const zoomOut = () => setZoom(canvasState.zoom - 0.1)
-
-/**
- * 重置缩放到 100%
- */
-const resetZoom = () => setZoom(1)
-
-/**
- * 自动适应屏幕
- * 根据画布容器尺寸计算最佳缩放比例，使画布完整显示在屏幕内
- */
-const fitToScreen = () => {
-  if (!scrollContainer.value) return
-  const containerRect = scrollContainer.value.getBoundingClientRect()
-  const scaleX = (containerRect.width - 100) / canvasState.width
-  const scaleY = (containerRect.height - 100) / canvasState.height
-  setZoom(Math.min(scaleX, scaleY, 1))
-}
-
-/**
- * 处理鼠标滚轮事件
- * 当按住 Ctrl/Cmd 键时，滚轮可以缩放画布
- * @param {WheelEvent} e - 滚轮事件对象
- */
-const handleWheel = (e) => {
-  if (e.ctrlKey || e.metaKey) {
-    e.preventDefault()
-    const delta = e.deltaY > 0 ? -0.1 : 0.1
-    setZoom(canvasState.zoom + delta)
-  }
-}
-
-/**
  * 在画布上添加一个矩形
  * @param {Object} options - 矩形配置选项
  * @returns {fabric.Rect} 创建的矩形对象
@@ -593,8 +564,7 @@ const clearCanvas = () => {
 const exportToImage = (format = 'png') => {
   return fabricCanvas.toDataURL({
     format: format,
-    quality: 1,
-    multiplier: 1 / canvasState.zoom
+    quality: 1
   })
 }
 
@@ -650,6 +620,14 @@ onMounted(() => {
   nextTick(() => {
     initCanvas()
   })
+  
+  // 添加窗口 resize 监听
+  window.addEventListener('resize', resizeCanvasToContainer)
+})
+
+onUnmounted(() => {
+  // 移除窗口 resize 监听
+  window.removeEventListener('resize', resizeCanvasToContainer)
 })
 
 // 暴露属性和方法
@@ -666,12 +644,7 @@ defineExpose({
   exportToImage,
   undo,
   redo,
-  getHistoryState,
-  setZoom,
-  zoomIn,
-  zoomOut,
-  resetZoom,
-  fitToScreen
+  getHistoryState
 })
 </script>
 
@@ -680,6 +653,7 @@ defineExpose({
   flex: 1;
   position: relative;
   overflow: hidden;
+  margin: 10px;
 }
 
 .canvas-container {
@@ -688,36 +662,13 @@ defineExpose({
   left: 24px;
   right: 0;
   bottom: 0;
-  overflow: auto;
-  background: var(--canvas-bg);
-  display: flex;
-  align-items: center;
-  justify-content: center;
+  overflow: hidden;
 }
 
-.canvas-viewport {
+.canvas-element {
+  display: block;
+  width: 100%;
+  height: 100%;
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
-}
-
-.zoom-controls {
-  position: absolute;
-  bottom: 16px;
-  left: 50%;
-  transform: translateX(-50%);
-  background: white;
-  padding: 8px 16px;
-  border-radius: 8px;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  z-index: 100;
-}
-
-.zoom-level {
-  font-size: 14px;
-  color: #595959;
-  min-width: 50px;
-  text-align: center;
 }
 </style>
