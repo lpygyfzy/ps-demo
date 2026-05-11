@@ -55,6 +55,19 @@
       </button>
     </a-tooltip>
 
+    <!-- 梯形工具 -->
+    <a-tooltip title="梯形工具 (T)" position="right">
+      <button 
+        class="tool-btn" 
+        :class="{ active: currentTool === 'trapezoid' }"
+        @click="$emit('tool-change', 'trapezoid')"
+      >
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M4 12h16M4 12l4-6 8 0 4 6M4 12l4 6 8 0 4-6"/>
+        </svg>
+      </button>
+    </a-tooltip>
+
     <!-- 钢笔工具 -->
     <a-tooltip title="钢笔工具 (P)" position="right">
       <button 

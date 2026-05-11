@@ -107,8 +107,8 @@
           <div class="color-picker-row">
             <input 
               type="color" 
-              :value="selectedObject.fill || '#000000'"
-              @input="e => updateProperty('fill', e.target.value)"
+              :value="getColorWithoutAlpha(selectedObject.fill)"
+              @input="e => updateFillColor(e.target.value)"
               class="color-input"
             />
             <a-input 
@@ -118,6 +118,16 @@
               style="flex: 1;"
             />
           </div>
+          <div class="property-field full-width opacity-slider">
+            <label>填充透明度 ({{ Math.round((getFillOpacity() * 100)) }}%)</label>
+            <a-slider 
+              :value="getFillOpacity()"
+              @change="val => updateFillOpacity(val)"
+              :min="0"
+              :max="1"
+              :step="0.01"
+            />
+          </div>
         </div>
 
         <div class="property-field full-width">
@@ -125,8 +135,8 @@
           <div class="color-picker-row">
             <input 
               type="color" 
-              :value="selectedObject.stroke || '#000000'"
-              @input="e => updateProperty('stroke', e.target.value)"
+              :value="getColorWithoutAlpha(selectedObject.stroke)"
+              @input="e => updateStrokeColor(e.target.value)"
               class="color-input"
             />
             <a-input 
@@ -134,6 +144,16 @@
               @change="e => updateProperty('stroke', e.target.value)"
               size="small"
               style="flex: 1;"
+            />
+          </div>
+          <div class="property-field full-width opacity-slider">
+            <label>边框透明度 ({{ Math.round((getStrokeOpacity() * 100)) }}%)</label>
+            <a-slider 
+              :value="getStrokeOpacity()"
+              @change="val => updateStrokeOpacity(val)"
+              :min="0"
+              :max="1"
+              :step="0.01"
             />
           </div>
         </div>
@@ -151,7 +171,7 @@
         </div>
 
         <div class="property-field full-width">
-          <label>不透明度 ({{ Math.round((selectedObject.opacity || 1) * 100) }}%)</label>
+          <label>整体不透明度 ({{ Math.round((selectedObject.opacity || 1) * 100) }}%)</label>
           <a-slider 
             :value="selectedObject.opacity || 1"
             @change="val => updateProperty('opacity', val)"
@@ -375,6 +395,165 @@ const flipVertical = () => {
   const currentScaleY = props.selectedObject.scaleY || 1
   updateProperty('scaleY', -currentScaleY)
 }
+
+/**
+ * 从颜色值中提取纯颜色部分（去除透明度）
+ * @param {string} color - 颜色值（支持 rgba 和 hex）
+ * @returns {string} 纯颜色值（hex格式）
+ */
+const getColorWithoutAlpha = (color) => {
+  if (!color) return '#000000'
+  
+  if (color.startsWith('rgba')) {
+    const match = color.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)/)
+    if (match) {
+      const r = parseInt(match[1]).toString(16).padStart(2, '0')
+      const g = parseInt(match[2]).toString(16).padStart(2, '0')
+      const b = parseInt(match[3]).toString(16).padStart(2, '0')
+      return `#${r}${g}${b}`
+    }
+  }
+  
+  if (color.startsWith('rgb')) {
+    const match = color.match(/rgb\((\d+),\s*(\d+),\s*(\d+)/)
+    if (match) {
+      const r = parseInt(match[1]).toString(16).padStart(2, '0')
+      const g = parseInt(match[2]).toString(16).padStart(2, '0')
+      const b = parseInt(match[3]).toString(16).padStart(2, '0')
+      return `#${r}${g}${b}`
+    }
+  }
+  
+  if (color.startsWith('#') && color.length === 9) {
+    return color.substring(0, 7)
+  }
+  
+  if (color.startsWith('#') && color.length === 5) {
+    return color.substring(0, 4)
+  }
+  
+  return color
+}
+
+/**
+ * 从颜色值中提取透明度
+ * @param {string} color - 颜色值
+ * @returns {number} 透明度值（0-1）
+ */
+const getOpacityFromColor = (color) => {
+  if (!color) return 1
+  
+  if (color.startsWith('rgba')) {
+    const match = color.match(/rgba?\(\d+,\s*\d+,\s*\d+,\s*([\d.]+)\)/)
+    if (match) {
+      return parseFloat(match[1])
+    }
+  }
+  
+  if (color.startsWith('#') && color.length === 9) {
+    const alpha = parseInt(color.substring(7, 9), 16) / 255
+    return alpha
+  }
+  
+  if (color.startsWith('#') && color.length === 5) {
+    const alpha = parseInt(color.substring(4, 5).repeat(2), 16) / 255
+    return alpha
+  }
+  
+  return 1
+}
+
+/**
+ * 获取填充颜色的透明度
+ */
+const getFillOpacity = () => {
+  if (!props.selectedObject) return 1
+  return getOpacityFromColor(props.selectedObject.fill)
+}
+
+/**
+ * 获取边框颜色的透明度
+ */
+const getStrokeOpacity = () => {
+  if (!props.selectedObject) return 1
+  return getOpacityFromColor(props.selectedObject.stroke)
+}
+
+/**
+ * 更新填充颜色（保持原有透明度）
+ * @param {string} color - 新的颜色值
+ */
+const updateFillColor = (color) => {
+  if (!props.selectedObject) return
+  
+  const currentOpacity = getFillOpacity()
+  const newColor = hexToRgba(color, currentOpacity)
+  updateProperty('fill', newColor)
+}
+
+/**
+ * 更新边框颜色（保持原有透明度）
+ * @param {string} color - 新的颜色值
+ */
+const updateStrokeColor = (color) => {
+  if (!props.selectedObject) return
+  
+  const currentOpacity = getStrokeOpacity()
+  const newColor = hexToRgba(color, currentOpacity)
+  updateProperty('stroke', newColor)
+}
+
+/**
+ * 更新填充颜色透明度
+ * @param {number} opacity - 新的透明度值（0-1）
+ */
+const updateFillOpacity = (opacity) => {
+  if (!props.selectedObject) return
+  
+  const currentColor = props.selectedObject.fill
+  const baseColor = getColorWithoutAlpha(currentColor)
+  const newColor = hexToRgba(baseColor, opacity)
+  updateProperty('fill', newColor)
+}
+
+/**
+ * 更新边框颜色透明度
+ * @param {number} opacity - 新的透明度值（0-1）
+ */
+const updateStrokeOpacity = (opacity) => {
+  if (!props.selectedObject) return
+  
+  const currentColor = props.selectedObject.stroke
+  const baseColor = getColorWithoutAlpha(currentColor)
+  const newColor = hexToRgba(baseColor, opacity)
+  updateProperty('stroke', newColor)
+}
+
+/**
+ * 将 hex 颜色转换为 rgba 格式
+ * @param {string} hex - hex颜色值
+ * @param {number} alpha - 透明度（0-1）
+ * @returns {string} rgba颜色值
+ */
+const hexToRgba = (hex, alpha = 1) => {
+  if (!hex.startsWith('#')) return hex
+  
+  let r, g, b
+  
+  if (hex.length === 7) {
+    r = parseInt(hex.substring(1, 3), 16)
+    g = parseInt(hex.substring(3, 5), 16)
+    b = parseInt(hex.substring(5, 7), 16)
+  } else if (hex.length === 4) {
+    r = parseInt(hex[1] + hex[1], 16)
+    g = parseInt(hex[2] + hex[2], 16)
+    b = parseInt(hex[3] + hex[3], 16)
+  } else {
+    return hex
+  }
+  
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`
+}
 </script>
 
 <style scoped>
@@ -473,6 +652,16 @@ const flipVertical = () => {
 }
 
 .info-label {
+  color: #8c8c8c;
+}
+
+.opacity-slider {
+  margin-top: 8px;
+  margin-bottom: 0;
+}
+
+.opacity-slider label {
+  font-size: 11px;
   color: #8c8c8c;
 }
 

@@ -3,7 +3,6 @@
     <!-- 顶部工具栏 -->
     <div class="editor-header">
       <div class="header-title">
-        <span class="logo">🎨</span>
         <span>Canvas Editor</span>
       </div>
       <div class="header-actions">
@@ -18,6 +17,10 @@
           </a-button>
         </a-button-group>
         <a-divider type="vertical" />
+        <a-button @click="handleImport">
+          <template #icon><UploadOutlined /></template>
+          导入
+        </a-button>
         <a-button @click="handleExport">
           <template #icon><DownloadOutlined /></template>
           导出
@@ -71,7 +74,7 @@
       @cancel="showExportModal = false"
     >
       <div class="export-options">
-        <div class="export-preview" v-if="exportPreview">
+        <div class="export-preview" v-if="exportPreview && exportFormat !== 'dxf'">
           <img :src="exportPreview" alt="预览" />
         </div>
         <div class="export-formats">
@@ -79,11 +82,17 @@
             <a-radio-button value="png">PNG</a-radio-button>
             <a-radio-button value="jpeg">JPEG</a-radio-button>
             <a-radio-button value="webp">WebP</a-radio-button>
+            <a-radio-button value="dxf">DXF</a-radio-button>
           </a-radio-group>
         </div>
-        <div class="export-quality" v-if="exportFormat !== 'png'">
+        <div class="export-quality" v-if="['jpeg', 'webp'].includes(exportFormat)">
           <label>图片质量: {{ exportQuality }}%</label>
           <a-slider v-model:value="exportQuality" :min="10" :max="100" :step="5" />
+        </div>
+        <div class="export-tip" v-if="exportFormat === 'dxf'">
+          <p style="color: #666; font-size: 12px; margin-top: 16px;">
+            DXF格式适用于CAD软件导入，导出的文件可以在AutoCAD等软件中打开编辑。
+          </p>
         </div>
       </div>
     </a-modal>
@@ -121,8 +130,11 @@ import PropertyPanel from './components/PropertyPanel.vue'
 import { 
   UndoOutlined, 
   RedoOutlined, 
-  DownloadOutlined 
+  DownloadOutlined,
+  UploadOutlined
 } from '@ant-design/icons-vue'
+import { dxfParser } from './utils/dxfParser'
+import { dxfWriter } from './utils/dxfWriter'
 
 // 组件引用
 const canvasComponent = ref(null)
@@ -143,7 +155,7 @@ const exportPreview = ref('')
 const toolSettings = reactive({
   fillColor: '#1890ff',
   strokeColor: '#000000',
-  strokeWidth: 2,
+  strokeWidth: 1,
   penColor: '#000000',
   penWidth: 2
 })
@@ -189,6 +201,9 @@ const handleKeyDown = (e) => {
         break
       case 'p':
         handleToolChange('pen')
+        break
+      case 't':
+        handleToolChange('trapezoid')
         break
       case 'delete':
       case 'backspace':
@@ -392,33 +407,36 @@ const handleObjectUpdate = (props) => {
 }
 
 /**
- * 打开导出图片预览模态框
- * 生成当前画布的 DataURL 并显示预览
+ * 打开导出预览模态框
  */
 const handleExport = () => {
-  if (canvasComponent.value) {
+  if (canvasComponent.value && exportFormat.value !== 'dxf') {
     const dataUrl = canvasComponent.value.exportToImage(exportFormat.value)
     exportPreview.value = dataUrl
-    showExportModal.value = true
   }
+  showExportModal.value = true
 }
 
 /**
- * 确认导出图片
- * 创建下载链接触发图片下载，然后关闭模态框
+ * 确认导出
  */
 const handleExportConfirm = () => {
   if (canvasComponent.value) {
-    const dataUrl = canvasComponent.value.exportToImage(exportFormat.value)
-    
-    // 创建下载链接
-    const link = document.createElement('a')
-    link.download = `canvas-image.${exportFormat.value}`
-    link.href = dataUrl
-    link.click()
+    if (exportFormat.value === 'dxf') {
+      handleExportDxf()
+    } else {
+      const dataUrl = canvasComponent.value.exportToImage(exportFormat.value)
+      
+      // 创建下载链接
+      const link = document.createElement('a')
+      link.download = `canvas-image.${exportFormat.value}`
+      link.href = dataUrl
+      link.click()
+      
+      message.success('图片导出成功')
+    }
     
     showExportModal.value = false
-    message.success('图片导出成功')
   }
 }
 
@@ -432,6 +450,52 @@ const handleClearConfirm = () => {
     selectedObject.value = null
     showClearModal.value = false
     message.success('画布已清空')
+  }
+}
+
+/**
+ * 处理导入操作
+ * 创建隐藏的文件输入元素并触发点击
+ */
+const handleImport = () => {
+  const input = document.createElement('input')
+  input.type = 'file'
+  input.accept = '.dxf'
+  input.style.display = 'none'
+  input.onchange = async (e) => {
+    const file = e.target.files[0]
+    if (file) {
+      try {
+        message.loading('正在导入DXF文件...', 0)
+        const objects = await dxfParser.loadFromFile(file)
+        
+        if (canvasComponent.value) {
+          const canvas = canvasComponent.value.canvasRef()
+          objects.forEach(obj => {
+            canvas.add(obj)
+          })
+          canvas.renderAll()
+        }
+        
+        message.success('DXF文件导入成功')
+      } catch (error) {
+        message.error('导入失败: ' + error.message)
+      }
+    }
+    document.body.removeChild(input)
+  }
+  document.body.appendChild(input)
+  input.click()
+}
+
+/**
+ * 处理DXF导出
+ */
+const handleExportDxf = () => {
+  if (canvasComponent.value) {
+    const canvas = canvasComponent.value.canvasRef()
+    dxfWriter.exportFromCanvas(canvas, 'drawing.dxf')
+    message.success('DXF文件导出成功')
   }
 }
 
@@ -472,10 +536,6 @@ onUnmounted(() => {
   font-size: 16px;
   font-weight: 600;
   color: #262626;
-}
-
-.logo {
-  font-size: 24px;
 }
 
 .header-actions {

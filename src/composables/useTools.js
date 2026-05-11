@@ -9,7 +9,8 @@ export const ToolType = {
   MOVE: 'move',       // 移动工具
   RECT: 'rect',       // 矩形工具
   CIRCLE: 'circle',   // 圆形工具
-  PEN: 'pen'          // 钢笔工具
+  PEN: 'pen',         // 钢笔工具
+  TRAPEZOID: 'trapezoid' // 梯形工具
 }
 
 /**
@@ -87,6 +88,13 @@ export function useTools() {
   }
 
   /**
+   * 切换到梯形工具
+   */
+  const selectTrapezoidTool = () => {
+    currentTool.value = ToolType.TRAPEZOID
+  }
+
+  /**
    * 更新工具设置
    * @param {string} key - 设置项键名
    * @param {*} value - 设置值
@@ -118,6 +126,7 @@ export function useTools() {
     selectRectTool,
     selectCircleTool,
     selectPenTool,
+    selectTrapezoidTool,
     updateSettings,
     resetSettings
   }

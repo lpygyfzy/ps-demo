@@ -12,7 +12,8 @@
       class="canvas-container"
       :class="{
         'tool-select': currentTool === ToolType.SELECT,
-        'tool-move': currentTool === ToolType.MOVE
+        'tool-move': currentTool === ToolType.MOVE,
+        'edit-mode': isEditMode
       }"
     >
       <canvas ref="canvasRef" class="canvas-element"></canvas>
@@ -59,6 +60,13 @@ const canvasState = reactive({
   selectedObject: null
 })
 
+// 编辑模式状态
+const isEditMode = ref(false)
+let editingObject = null
+let controlPoints = []
+let editingGroup = null
+let originalFill = undefined
+
 // 历史记录
 const history = ref([])
 const historyIndex = ref(-1)
@@ -70,21 +78,17 @@ const isHistoryAction = ref(false)
 const resizeCanvasToContainer = () => {
   if (!canvasRef.value || !scrollContainer.value) return
   
-  // 获取 canvas-wrapper 的实际尺寸（不是 canvas-container）
   const canvasWrapper = scrollContainer.value.parentElement
   if (!canvasWrapper) return
   
   const containerRect = canvasWrapper.getBoundingClientRect()
   
-  // 画布区域需要减去标尺的尺寸（24px）
-  const canvasWidth = containerRect.width - 24  // 减去垂直标尺宽度
-  const canvasHeight = containerRect.height - 24 // 减去水平标尺高度
+  const canvasWidth = containerRect.width - 24
+  const canvasHeight = containerRect.height - 24
   
-  // 设置画布尺寸
   canvasState.width = canvasWidth
   canvasState.height = canvasHeight
   
-  // 更新 Fabric 画布尺寸
   if (fabricCanvas) {
     fabricCanvas.setWidth(canvasWidth)
     fabricCanvas.setHeight(canvasHeight)
@@ -94,14 +98,24 @@ const resizeCanvasToContainer = () => {
 
 /**
  * 初始化 Fabric.js 画布
- * 创建画布实例，绑定事件监听器，初始化历史记录
- * @returns {fabric.Canvas} 画布实例
  */
 const initCanvas = () => {
   if (!canvasRef.value) return
   
-  // 先获取容器尺寸
   resizeCanvasToContainer()
+
+  fabric.Object.prototype.set({
+    cornerSize: 8,
+    transparentCorners: false,
+    cornerColor: '#ffffff',
+    cornerStrokeColor: '#1890ff',
+    cornerStrokeWidth: 1,
+    borderScaleFactor: 1,
+    hasRotatingPoint: true,
+    rotatingPointOffset: 30,
+    padding: 0,
+    hasBorder: true,
+  })
 
   fabricCanvas = new fabric.Canvas(canvasRef.value, {
     width: canvasState.width,
@@ -111,15 +125,28 @@ const initCanvas = () => {
     preserveObjectStacking: true
   })
 
-  // 设置绘制模式
   fabricCanvas.isDrawingMode = false
   fabricCanvas.freeDrawingBrush = new fabric.PencilBrush(fabricCanvas)
   fabricCanvas.freeDrawingBrush.color = props.toolSettings.penColor || '#000000'
   fabricCanvas.freeDrawingBrush.width = props.toolSettings.penWidth || 2
 
   // 监听选择事件
-  fabricCanvas.on('selection:created', handleSelection)
-  fabricCanvas.on('selection:updated', handleSelection)
+  fabricCanvas.on('selection:created', (e) => {
+    // 如果在编辑模式，取消选择
+    if (isEditMode.value) {
+      fabricCanvas.discardActiveObject()
+      return
+    }
+    handleSelection(e)
+  })
+  fabricCanvas.on('selection:updated', (e) => {
+    // 如果在编辑模式，取消选择
+    if (isEditMode.value) {
+      fabricCanvas.discardActiveObject()
+      return
+    }
+    handleSelection(e)
+  })
   fabricCanvas.on('selection:cleared', () => {
     canvasState.selectedObject = null
     emit('object-selected', null)
@@ -127,7 +154,7 @@ const initCanvas = () => {
 
   // 监听对象修改
   fabricCanvas.on('object:modified', (e) => {
-    if (!isHistoryAction.value) {
+    if (!isHistoryAction.value && !isEditMode.value) {
       saveHistory()
     }
     emit('object-modified', e.target)
@@ -135,9 +162,8 @@ const initCanvas = () => {
 
   // 监听对象添加
   fabricCanvas.on('object:added', (e) => {
-    if (!isHistoryAction.value && e.target) {
+    if (!isHistoryAction.value && e.target && e.target.type !== 'circle') {
       saveHistory()
-      // 通知父组件更新撤销/重做按钮状态
       emit('object-modified', e.target)
     }
   })
@@ -147,40 +173,37 @@ const initCanvas = () => {
   fabricCanvas.on('mouse:move', handleMouseMove)
   fabricCanvas.on('mouse:up', handleMouseUp)
 
-  // 监听对象移动事件，实时更新属性面板
+  // 监听双击事件进入编辑模式
+  fabricCanvas.on('mouse:dblclick', handleDoubleClick)
+
+  // 监听对象移动事件
   fabricCanvas.on('object:moving', (e) => {
     canvasState.selectedObject = e.target
     emit('object-selected', e.target)
   })
 
-  // 在对象移动结束后检查边界
+  // 边界检查
   fabricCanvas.on('object:modified', (e) => {
     const obj = e.target
-    if (!obj) return
+    if (!obj || isEditMode.value) return
     
     const canvasWidth = canvasState.width
     const canvasHeight = canvasState.height
-    
-    // 使用 getBoundingRect 获取对象的实际边界框（考虑所有变换）
     const boundingRect = obj.getBoundingRect()
     const objWidth = boundingRect.width
     const objHeight = boundingRect.height
     const objLeft = boundingRect.left
     const objTop = boundingRect.top
     
-    // 计算边界
     const maxLeft = canvasWidth - objWidth
     const maxTop = canvasHeight - objHeight
     
-    // 限制在边界内
     const newLeft = Math.max(0, Math.min(objLeft, maxLeft))
     const newTop = Math.max(0, Math.min(objTop, maxTop))
     
-    // 计算需要调整的偏移量
     const deltaX = newLeft - objLeft
     const deltaY = newTop - objTop
     
-    // 如果需要调整位置
     if (Math.round(deltaX) !== 0 || Math.round(deltaY) !== 0) {
       obj.set({
         left: obj.left + deltaX,
@@ -200,7 +223,6 @@ const initCanvas = () => {
     emit('object-selected', e.target)
   })
 
-  // 初始化历史
   saveHistory()
 
   emit('canvas-ready', fabricCanvas)
@@ -215,72 +237,446 @@ let startPoint = { x: 0, y: 0 }
 
 /**
  * 处理鼠标按下事件
- * 根据当前工具类型开始绘制形状（矩形、圆形）或检测是否点击了已有对象
- * @param {Object} opt - Fabric.js 鼠标事件对象
  */
 const handleMouseDown = (opt) => {
-  // 如果点击的是已有对象，不触发绘制，让Fabric.js处理选择
+  if (isEditMode.value) {
+    handleEditMouseDown(opt)
+    return
+  }
+
   if (opt.target) {
     return
   }
-  if (props.currentTool === ToolType.RECT || props.currentTool === ToolType.CIRCLE) {
-    isDrawing = true
-    const pointer = fabricCanvas.getPointer(opt.e)
-    startPoint = { x: pointer.x, y: pointer.y }
-    
-        if (props.currentTool === ToolType.RECT) {
-      tempObject = new fabric.Rect({
-        left: pointer.x,
-        top: pointer.y,
-        width: 0,
-        height: 0,
-        fill: props.toolSettings.fillColor || '#1890ff',
-        stroke: props.toolSettings.strokeColor || '#000000',
-        strokeWidth: props.toolSettings.strokeWidth || 2,
-        strokeUniform: true,
-        originX: 'center',
-        originY: 'center',
-        hasRotatingPoint: true,
-        rotatingPointOffset: 40,
-        cornerSize: 10,
-        transparentCorners: false,
-        cornerColor: '#1890ff',
-        cornerStrokeColor: '#ffffff',
-        borderColor: '#1890ff',
-        borderScaleFactor: 2
-      })
-    } else if (props.currentTool === ToolType.CIRCLE) {
-      tempObject = new fabric.Circle({
-        left: pointer.x,
-        top: pointer.y,
-        radius: 0,
-        fill: props.toolSettings.fillColor || '#52c41a',
-        stroke: props.toolSettings.strokeColor || '#000000',
-        strokeWidth: props.toolSettings.strokeWidth || 2,
-        strokeUniform: true,
-        originX: 'center',
-        originY: 'center',
-        hasRotatingPoint: true,
-        rotatingPointOffset: 40,
-        cornerSize: 10,
-        transparentCorners: false,
-        cornerColor: '#52c41a',
-        cornerStrokeColor: '#ffffff',
-        borderColor: '#52c41a',
-        borderScaleFactor: 2
-      })
+  const drawingTools = [ToolType.RECT, ToolType.CIRCLE, ToolType.TRAPEZOID]
+    if (drawingTools.includes(props.currentTool)) {
+      isDrawing = true
+      const pointer = fabricCanvas.getPointer(opt.e)
+      startPoint = { x: pointer.x, y: pointer.y }
+      
+      if (props.currentTool === ToolType.RECT) {
+        // 创建矩形对象
+        tempObject = new fabric.Rect({
+          left: pointer.x,
+          top: pointer.y,
+          width: 0,
+          height: 0,
+          fill: props.toolSettings.fillColor || '#1890ff',
+          stroke: props.toolSettings.strokeColor || '#000000',
+          strokeWidth: props.toolSettings.strokeWidth || 2,
+          strokeUniform: true,
+          originX: 'center',
+          originY: 'center'
+        })
+      } else if (props.currentTool === ToolType.CIRCLE) {
+        // 创建圆形对象
+        tempObject = new fabric.Circle({
+          left: pointer.x,
+          top: pointer.y,
+          radius: 0,
+          fill: props.toolSettings.fillColor || '#52c41a',
+          stroke: props.toolSettings.strokeColor || '#000000',
+          strokeWidth: props.toolSettings.strokeWidth || 2,
+          strokeUniform: true,
+          originX: 'center',
+          originY: 'center'
+        })
+      } else if (props.currentTool === ToolType.TRAPEZOID) {
+        // 创建梯形（通过多边形实现）
+        const initWidth = 100
+        const initHeight = 80
+        const initTopWidth = initWidth * 0.6
+        tempObject = new fabric.Polygon([
+          { x: -initTopWidth / 2, y: -initHeight / 2 },
+          { x: initTopWidth / 2, y: -initHeight / 2 },
+          { x: initWidth / 2, y: initHeight / 2 },
+          { x: -initWidth / 2, y: initHeight / 2 }
+        ], {
+          left: pointer.x,
+          top: pointer.y,
+          width: initWidth,
+          height: initHeight,
+          fill: props.toolSettings.fillColor || '#722ed1',
+          stroke: props.toolSettings.strokeColor || '#000000',
+          strokeWidth: props.toolSettings.strokeWidth || 2,
+          strokeUniform: true,
+          originX: 'center',
+          originY: 'center'
+        })
+        tempObject.setCoords()
+      }
+      
+      fabricCanvas.add(tempObject)
     }
+}
+
+/**
+ * 处理编辑模式下的鼠标按下事件
+ */
+const handleEditMouseDown = (opt) => {
+  const pointer = fabricCanvas.getPointer(opt.e)
+  
+  // 检查是否点击了控制点
+  const hitPoint = findHitControlPoint(pointer)
+  if (hitPoint) {
+    hitPoint.isDragging = true
+    hitPoint.startX = pointer.x
+    hitPoint.startY = pointer.y
+    hitPoint.startObjX = editingObject.left
+    hitPoint.startObjY = editingObject.top
+    return
+  }
+  
+  // 检查是否点击了边线（添加控制点）
+  const edgeHit = findHitEdge(pointer)
+  if (edgeHit) {
+    addControlPointAtEdge(edgeHit.edgeIndex, pointer)
+    return
+  }
+  
+  // 点击空白处退出编辑模式
+  exitEditMode()
+}
+
+/**
+ * 查找点击的控制点
+ */
+const findHitControlPoint = (pointer) => {
+  for (let i = 0; i < controlPoints.length; i++) {
+    const point = controlPoints[i]
+    const dx = point.x - pointer.x
+    const dy = point.y - pointer.y
+    if (dx * dx + dy * dy < 16 * 16) {
+      return point
+    }
+  }
+  return null
+}
+
+/**
+ * 查找点击的边线
+ */
+const findHitEdge = (pointer) => {
+  const points = getObjectPoints(editingObject)
+  if (!points || points.length < 2) return null
+  
+  for (let i = 0; i < points.length; i++) {
+    const p1 = points[i]
+    const p2 = points[(i + 1) % points.length]
     
-    fabricCanvas.add(tempObject)
+    const dist = pointToLineDistance(pointer.x, pointer.y, p1.x, p1.y, p2.x, p2.y)
+    if (dist < 10) {
+      return { edgeIndex: i, p1, p2 }
+    }
+  }
+  return null
+}
+
+/**
+ * 计算点到线段的距离
+ */
+const pointToLineDistance = (px, py, x1, y1, x2, y2) => {
+  const A = px - x1
+  const B = py - y1
+  const C = x2 - x1
+  const D = y2 - y1
+  
+  const dot = A * C + B * D
+  const lenSq = C * C + D * D
+  let param = -1
+  
+  if (lenSq !== 0) param = dot / lenSq
+  
+  let xx, yy
+  
+  if (param < 0) {
+    xx = x1
+    yy = y1
+  } else if (param > 1) {
+    xx = x2
+    yy = y2
+  } else {
+    xx = x1 + param * C
+    yy = y1 + param * D
+  }
+  
+  const dx = px - xx
+  const dy = py - yy
+  return Math.sqrt(dx * dx + dy * dy)
+}
+
+/**
+ * 在边线上添加控制点
+ */
+const addControlPointAtEdge = (edgeIndex, pointer) => {
+  const points = getObjectPoints(editingObject)
+  if (!points) return
+  
+  const newPoint = { x: pointer.x, y: pointer.y }
+  points.splice(edgeIndex + 1, 0, newPoint)
+  
+  updateObjectFromPoints(points)
+  saveHistory()
+}
+
+/**
+ * 获取对象的控制点
+ */
+const getObjectPoints = (obj) => {
+  if (!obj) return null
+  
+  switch (obj.type) {
+    case 'rect': {
+      const { left, top, width, height } = obj
+      const scaleX = obj.scaleX || 1
+      const scaleY = obj.scaleY || 1
+      const actualWidth = width * scaleX
+      const actualHeight = height * scaleY
+      return [
+        { x: left - actualWidth / 2, y: top - actualHeight / 2 },
+        { x: left + actualWidth / 2, y: top - actualHeight / 2 },
+        { x: left + actualWidth / 2, y: top + actualHeight / 2 },
+        { x: left - actualWidth / 2, y: top + actualHeight / 2 }
+      ]
+    }
+    case 'polygon':
+    case 'polyline': {
+      const scaleX = obj.scaleX || 1
+      const scaleY = obj.scaleY || 1
+      return obj.points.map(p => ({
+        x: obj.left + p.x * scaleX,
+        y: obj.top + p.y * scaleY
+      }))
+    }
+    case 'path':
+      return extractPathPoints(obj)
+    default:
+      return null
   }
 }
 
 /**
+ * 从路径中提取点
+ */
+const extractPathPoints = (path) => {
+  const points = []
+  const pathData = path.path
+  if (!pathData) return points
+  
+  let currentX = 0, currentY = 0
+  pathData.forEach(segment => {
+    const cmd = segment[0]
+    switch (cmd) {
+      case 'M':
+        currentX = segment[1]
+        currentY = segment[2]
+        points.push({ x: path.left + currentX, y: path.top + currentY })
+        break
+      case 'L':
+        currentX = segment[1]
+        currentY = segment[2]
+        points.push({ x: path.left + currentX, y: path.top + currentY })
+        break
+      case 'C':
+        currentX = segment[5]
+        currentY = segment[6]
+        points.push({ x: path.left + currentX, y: path.top + currentY })
+        break
+      case 'Q':
+        currentX = segment[3]
+        currentY = segment[4]
+        points.push({ x: path.left + currentX, y: path.top + currentY })
+        break
+      case 'Z':
+        break
+    }
+  })
+  return points
+}
+
+/**
+ * 近似贝塞尔曲线长度
+ */
+const approximateBezierLength = (x1, y1, x2, y2, x3, y3, x4, y4) => {
+  const steps = 10
+  let length = 0
+  let prevX = x1, prevY = y1
+  
+  for (let i = 1; i <= steps; i++) {
+    const t = i / steps
+    const x = bezierPoint(t, x1, x2, x3, x4)
+    const y = bezierPoint(t, y1, y2, y3, y4)
+    length += Math.sqrt(Math.pow(x - prevX, 2) + Math.pow(y - prevY, 2))
+    prevX = x
+    prevY = y
+  }
+  
+  return length
+}
+
+/**
+ * 贝塞尔曲线点计算
+ */
+const bezierPoint = (t, p0, p1, p2, p3) => {
+  const t2 = t * t
+  const t3 = t2 * t
+  const mt = 1 - t
+  const mt2 = mt * mt
+  const mt3 = mt2 * mt
+  
+  return mt3 * p0 + 3 * mt2 * t * p1 + 3 * mt * t2 * p2 + t3 * p3
+}
+
+/**
+ * 从路径数据中提取均匀分布的点
+ * @param {Array} pathData - 路径数据
+ * @param {number} count - 点的数量
+ * @returns {Array} 均匀分布的点
+ */
+const extractEvenlyDistributedPoints = (pathData, count) => {
+  const points = []
+  
+  let totalLength = 0
+  const segments = []
+  
+  let prevX = 0, prevY = 0
+  pathData.forEach((segment) => {
+    const cmd = segment[0]
+    switch (cmd) {
+      case 'M':
+        prevX = segment[1]
+        prevY = segment[2]
+        break
+      case 'L': {
+        const x = segment[1]
+        const y = segment[2]
+        const length = Math.sqrt(Math.pow(x - prevX, 2) + Math.pow(y - prevY, 2))
+        segments.push({ type: 'line', x1: prevX, y1: prevY, x2: x, y2: y, length })
+        totalLength += length
+        prevX = x
+        prevY = y
+        break
+      }
+      case 'C': {
+        const x1 = segment[1], y1 = segment[2]
+        const x2 = segment[3], y2 = segment[4]
+        const x = segment[5], y = segment[6]
+        const length = approximateBezierLength(prevX, prevY, x1, y1, x2, y2, x, y)
+        segments.push({ type: 'bezier', x1: prevX, y1: prevY, x2: x1, y2: y1, x3: x2, y3: y2, x4: x, y4: y, length })
+        totalLength += length
+        prevX = x
+        prevY = y
+        break
+      }
+    }
+  })
+  
+  if (totalLength === 0 || segments.length === 0) {
+    return points
+  }
+  
+  for (let i = 0; i < count; i++) {
+    const targetLength = (i / (count - 1)) * totalLength
+    let currentLength = 0
+    
+    for (const segment of segments) {
+      if (currentLength + segment.length >= targetLength) {
+        const t = (targetLength - currentLength) / segment.length
+        let x, y
+        
+        if (segment.type === 'line') {
+          x = segment.x1 + t * (segment.x2 - segment.x1)
+          y = segment.y1 + t * (segment.y2 - segment.y1)
+        } else {
+          x = bezierPoint(t, segment.x1, segment.x2, segment.x3, segment.x4)
+          y = bezierPoint(t, segment.y1, segment.y2, segment.y3, segment.y4)
+        }
+        
+        points.push({ x, y, t })
+        break
+      }
+      currentLength += segment.length
+    }
+  }
+  
+  return points
+}
+
+/**
+ * 从控制点更新路径（保持对象位置不变，按索引顺序重新构建路径）
+ */
+const updatePathFromControlPoints = () => {
+  if (!editingObject || editingObject.type !== 'path') return
+  
+  // 使用控制点的索引顺序，保持图形的正确连接顺序
+  const sortedPoints = [...controlPoints].sort((a, b) => a.index - b.index)
+  
+  if (sortedPoints.length < 3) return
+  
+  // 保持对象位置不变，只更新路径数据
+  const newPath = []
+  newPath.push(['M', sortedPoints[0].x - editingObject.left, sortedPoints[0].y - editingObject.top])
+  
+  for (let i = 1; i < sortedPoints.length; i++) {
+    const curr = sortedPoints[i]
+    newPath.push(['L', curr.x - editingObject.left, curr.y - editingObject.top])
+  }
+  
+  // 添加闭合命令，确保图形闭合
+  newPath.push(['Z'])
+  
+  // 更新路径
+  editingObject.set({ path: newPath })
+  editingObject.setCoords()
+}
+
+/**
+ * 根据点更新对象
+ */
+const updateObjectFromPoints = (points) => {
+  if (!editingObject || points.length < 3) return
+  
+  // 计算边界框
+  const minX = Math.min(...points.map(p => p.x))
+  const maxX = Math.max(...points.map(p => p.x))
+  const minY = Math.min(...points.map(p => p.y))
+  const maxY = Math.max(...points.map(p => p.y))
+  
+  const width = maxX - minX
+  const height = maxY - minY
+  const centerX = minX + width / 2
+  const centerY = minY + height / 2
+  
+  // 更新对象位置和尺寸
+  editingObject.set({
+    left: centerX,
+    top: centerY,
+    width: width,
+    height: height
+  })
+  
+  // 如果是多边形，更新点
+  if (editingObject.type === 'polygon' || editingObject.type === 'polyline') {
+    editingObject.set({
+      points: points.map(p => ({
+        x: p.x - centerX,
+        y: p.y - centerY
+      }))
+    })
+  }
+  
+  fabricCanvas.renderAll()
+  updateControlPoints()
+}
+
+/**
  * 处理鼠标移动事件
- * 更新临时形状的尺寸（矩形的长宽、圆形的半径）
- * @param {Object} opt - Fabric.js 鼠标事件对象
  */
 const handleMouseMove = (opt) => {
+  if (isEditMode.value) {
+    handleEditMouseMove(opt)
+    return
+  }
+
   if (!isDrawing || !tempObject) return
   
   const pointer = fabricCanvas.getPointer(opt.e)
@@ -310,28 +706,103 @@ const handleMouseMove = (opt) => {
       left: centerX,
       top: centerY
     })
+  } else if (props.currentTool === ToolType.TRAPEZOID) {
+    const width = Math.max(Math.abs(pointer.x - startPoint.x), 20)
+    const height = Math.max(Math.abs(pointer.y - startPoint.y), 20)
+    const centerX = (pointer.x + startPoint.x) / 2
+    const centerY = (pointer.y + startPoint.y) / 2
+    const topWidth = width * 0.6
+    
+    tempObject.set({
+      left: centerX,
+      top: centerY,
+      points: [
+        { x: -topWidth / 2, y: -height / 2 },
+        { x: topWidth / 2, y: -height / 2 },
+        { x: width / 2, y: height / 2 },
+        { x: -width / 2, y: height / 2 }
+      ],
+      width: width,
+      height: height
+    })
+    tempObject.setCoords()
   }
   
   fabricCanvas.renderAll()
 }
 
 /**
+ * 处理编辑模式下的鼠标移动
+ */
+const handleEditMouseMove = (opt) => {
+  const pointer = fabricCanvas.getPointer(opt.e)
+  
+  // 检查是否有控制点正在拖拽
+  const draggingPoint = controlPoints.find(p => p.isDragging)
+  if (draggingPoint) {
+    const dx = pointer.x - draggingPoint.startX
+    const dy = pointer.y - draggingPoint.startY
+    
+    draggingPoint.x = draggingPoint.startX + dx
+    draggingPoint.y = draggingPoint.startY + dy
+    draggingPoint.circle.set({ left: draggingPoint.x, top: draggingPoint.y })
+    
+    // 如果是路径类型，更新路径
+    if (editingObject.type === 'path') {
+      updatePathFromControlPoints()
+    } else {
+      // 对于其他类型对象
+      const points = getObjectPoints(editingObject)
+      if (points) {
+        const index = controlPoints.indexOf(draggingPoint)
+        if (index >= 0 && index < points.length) {
+          points[index] = { x: draggingPoint.x, y: draggingPoint.y }
+          updateObjectFromPoints(points)
+        }
+      }
+    }
+    
+    fabricCanvas.renderAll()
+    return
+  }
+  
+  // 更新鼠标样式
+  if (findHitControlPoint(pointer)) {
+    fabricCanvas.defaultCursor = 'move'
+  } else if (findHitEdge(pointer)) {
+    fabricCanvas.defaultCursor = 'crosshair'
+  } else {
+    fabricCanvas.defaultCursor = 'default'
+  }
+}
+
+/**
  * 处理鼠标释放事件
- * 完成形状绘制，如果绘制区域太小则删除临时对象
  */
 const handleMouseUp = () => {
+  if (isEditMode.value) {
+    controlPoints.forEach(p => p.isDragging = false)
+    return
+  }
+
   if (isDrawing && tempObject) {
-    // 如果绘制区域太小，删除临时对象
-    const isTooSmall = tempObject.type === 'rect'
-      ? (tempObject.width < 5 || tempObject.height < 5)
-      : (tempObject.radius && tempObject.radius < 5)
+    let isTooSmall = false
+    
+    if (tempObject.type === 'rect') {
+      isTooSmall = tempObject.width < 5 || tempObject.height < 5
+    } else if (tempObject.type === 'circle') {
+      isTooSmall = tempObject.radius && tempObject.radius < 5
+    } else if (tempObject.type === 'polygon') {
+      // 检查多边形的边界框是否太小
+      const bounds = tempObject.getBoundingRect()
+      isTooSmall = bounds.width < 5 || bounds.height < 5
+    }
     
     if (isTooSmall) {
       fabricCanvas.remove(tempObject)
     } else {
       fabricCanvas.setActiveObject(tempObject)
       saveHistory()
-      // 通知父组件更新选中对象
       canvasState.selectedObject = tempObject
       emit('object-selected', tempObject)
     }
@@ -341,9 +812,218 @@ const handleMouseUp = () => {
 }
 
 /**
+ * 处理双击事件进入编辑模式
+ */
+const handleDoubleClick = (opt) => {
+  if (!opt.target) return
+  
+  const obj = opt.target
+  
+  // 只支持特定类型的对象进入编辑模式
+  console.log(obj.type)
+  // if (!['rect', 'polygon', 'polyline', 'path', 'circle'].includes(obj.type)) {
+  //   return
+  // }
+  
+  enterEditMode(obj)
+}
+
+/**
+ * 进入编辑模式
+ */
+const enterEditMode = (obj) => {
+  isEditMode.value = true
+  
+  // 禁用画布的选择功能
+  fabricCanvas.selection = false
+  
+  // 保存原始填充色，以便退出时恢复
+  originalFill = obj.fill
+  
+  // 将对象转换为路径，便于编辑
+  if (obj.type === 'polygon' || obj.type === 'rect') {
+    let path = null
+    
+    const originX = obj.originX || 'center'
+    const originY = obj.originY || 'center'
+    
+    if (obj.toPath) {
+      path = obj.toPath(true)
+    } else {
+      // 手动创建路径
+      const points = getObjectPoints(obj)
+      if (points && points.length >= 3) {
+        const pathData = []
+        // 使用对象的中心点作为路径的原点
+        const center = obj.getCenterPoint() || { x: obj.left, y: obj.top }
+        pathData.push(['M', points[0].x - center.x, points[0].y - center.y])
+        for (let i = 1; i < points.length; i++) {
+          pathData.push(['L', points[i].x - center.x, points[i].y - center.y])
+        }
+        pathData.push(['Z'])
+        path = new fabric.Path(pathData)
+      }
+    }
+    
+    if (path) {
+      const center = obj.getCenterPoint() || { x: obj.left, y: obj.top }
+      path.set({
+        left: center.x,
+        top: center.y,
+        originX: 'center',
+        originY: 'center',
+        fill: 'transparent',
+        stroke: obj.stroke,
+        strokeWidth: obj.strokeWidth
+      })
+      path.setCoords()
+      fabricCanvas.remove(obj)
+      fabricCanvas.add(path)
+      editingObject = path
+    } else {
+      editingObject = obj
+    }
+  } else {
+    editingObject = obj
+  }
+  
+  // 取消选择状态
+  fabricCanvas.discardActiveObject()
+  
+  // 创建控制点
+  updateControlPoints()
+  
+}
+
+/**
+ * 退出编辑模式
+ */
+const exitEditMode = () => {
+  isEditMode.value = false
+  
+  // 恢复画布的选择功能
+  fabricCanvas.selection = true
+  
+  // 恢复原始填充色
+  if (editingObject && originalFill !== undefined) {
+    editingObject.set({ fill: originalFill })
+    originalFill = undefined
+  }
+  
+  // 保存控制点位置到对象，以便下次进入编辑模式时使用
+  if (editingObject && controlPoints.length > 0) {
+    const savedPoints = controlPoints.map(point => ({
+      x: point.x,
+      y: point.y,
+      t: point.t
+    }))
+    editingObject.set({ __controlPoints: savedPoints })
+  }
+  
+  // 移除控制点
+  controlPoints.forEach(point => {
+    if (point.circle) {
+      fabricCanvas.remove(point.circle)
+    }
+  })
+  controlPoints = []
+  
+  // 移除高亮边线
+  if (editingGroup) {
+    fabricCanvas.remove(editingGroup)
+    editingGroup = null
+  }
+  
+  editingObject = null
+}
+
+/**
+ * 更新控制点
+ */
+const updateControlPoints = () => {
+  // 清除现有控制点
+  controlPoints.forEach(point => {
+    if (point.circle) {
+      fabricCanvas.remove(point.circle)
+    }
+  })
+  controlPoints = []
+  
+  if (editingObject.type === 'path') {
+    // 直接从路径数据中提取顶点作为控制点
+    const pathData = editingObject.path
+    if (!pathData) return
+    
+    const points = []
+    
+    pathData.forEach(segment => {
+      if (segment[0] === 'M' || segment[0] === 'L') {
+        points.push({
+          x: editingObject.left + segment[1],
+          y: editingObject.top + segment[2]
+        })
+      }
+    })
+    
+    // 如果没有闭合，添加第一个点作为最后一个点
+    if (pathData[pathData.length - 1][0] !== 'Z' && points.length > 0) {
+      points.push(points[0])
+    }
+    
+    // 使用前4个点作为控制点
+    const controlPointCount = Math.min(points.length, 4)
+    
+    points.slice(0, controlPointCount).forEach((point, index) => {
+      const circle = new fabric.Circle({
+        left: point.x,
+        top: point.y,
+        radius: 8,
+        fill: '#1890ff',
+        stroke: '#000000',
+        strokeWidth: 2,
+        selectable: false,
+        evented: true,
+        originX: 'center',
+        originY: 'center',
+      })
+      
+      controlPoints.push({
+        x: point.x,
+        y: point.y,
+        index: index,
+        circle: circle,
+        isDragging: false
+      })
+      
+      fabricCanvas.add(circle)
+    })
+  }
+  
+  fabricCanvas.renderAll()
+}
+
+/**
+ * 判断路径是否是矩形（4条边，L命令，闭合）
+ */
+const isRectanglePath = (pathData) => {
+  if (!pathData || pathData.length !== 5) return false
+  
+  // 检查第一个命令是M
+  if (pathData[0][0] !== 'M') return false
+  
+  // 检查中间3个命令是L
+  for (let i = 1; i < 4; i++) {
+    if (pathData[i][0] !== 'L') return false
+  }
+  
+  // 检查最后一个命令是Z（闭合）
+  if (pathData[4][0] !== 'Z') return false
+  
+  return true
+}
+
+/**
  * 处理对象选择事件
- * 将选中的对象存储到 canvasState 并通过 emit 通知父组件
- * @param {Object} e - Fabric.js 选择事件对象
  */
 const handleSelection = (e) => {
   const selected = e.selected ? e.selected[0] : null
@@ -353,14 +1033,12 @@ const handleSelection = (e) => {
 
 /**
  * 保存当前画布状态到历史记录
- * 用于撤销/重做功能，最多保存50条历史记录
  */
 const saveHistory = () => {
   if (isHistoryAction.value) return
   
   const json = fabricCanvas.toJSON()
   
-  // 移除超出范围的历史
   if (historyIndex.value < history.value.length - 1) {
     history.value = history.value.slice(0, historyIndex.value + 1)
   }
@@ -368,7 +1046,6 @@ const saveHistory = () => {
   history.value.push(JSON.stringify(json))
   historyIndex.value = history.value.length - 1
   
-  // 限制历史记录数量
   if (history.value.length > 50) {
     history.value.shift()
     historyIndex.value--
@@ -377,7 +1054,6 @@ const saveHistory = () => {
 
 /**
  * 撤销上一操作
- * 将历史索引减一并恢复对应的画布状态
  */
 const undo = () => {
   if (historyIndex.value > 0) {
@@ -388,7 +1064,6 @@ const undo = () => {
 
 /**
  * 重做上一撤销的操作
- * 将历史索引加一并恢复对应的画布状态
  */
 const redo = () => {
   if (historyIndex.value < history.value.length - 1) {
@@ -399,7 +1074,6 @@ const redo = () => {
 
 /**
  * 从历史记录恢复画布状态
- * 异步加载历史 JSON 并重绘画布
  */
 const restoreHistory = async () => {
   isHistoryAction.value = true
@@ -408,13 +1082,12 @@ const restoreHistory = async () => {
   await fabricCanvas.loadFromJSON(json, () => {
     fabricCanvas.renderAll()
     isHistoryAction.value = false
+    exitEditMode()
   })
 }
 
 /**
  * 在画布上添加一个矩形
- * @param {Object} options - 矩形配置选项
- * @returns {fabric.Rect} 创建的矩形对象
  */
 const addRect = (options = {}) => {
   const rect = new fabric.Rect({
@@ -428,15 +1101,7 @@ const addRect = (options = {}) => {
     angle: options.angle || 0,
     strokeUniform: true,
     originX: 'center',
-    originY: 'center',
-    hasRotatingPoint: true,
-    rotatingPointOffset: 40,
-    cornerSize: 10,
-    transparentCorners: false,
-    cornerColor: '#1890ff',
-    cornerStrokeColor: '#ffffff',
-    borderColor: '#1890ff',
-    borderScaleFactor: 2
+    originY: 'center'
   })
   fabricCanvas.add(rect)
   fabricCanvas.setActiveObject(rect)
@@ -447,8 +1112,6 @@ const addRect = (options = {}) => {
 
 /**
  * 在画布上添加一个圆形
- * @param {Object} options - 圆形配置选项
- * @returns {fabric.Circle} 创建的圆形对象
  */
 const addCircle = (options = {}) => {
   const circle = new fabric.Circle({
@@ -461,15 +1124,7 @@ const addCircle = (options = {}) => {
     angle: options.angle || 0,
     strokeUniform: true,
     originX: 'center',
-    originY: 'center',
-    hasRotatingPoint: true,
-    rotatingPointOffset: 40,
-    cornerSize: 10,
-    transparentCorners: false,
-    cornerColor: '#52c41a',
-    cornerStrokeColor: '#ffffff',
-    borderColor: '#52c41a',
-    borderScaleFactor: 2
+    originY: 'center'
   })
   fabricCanvas.add(circle)
   fabricCanvas.setActiveObject(circle)
@@ -480,7 +1135,6 @@ const addCircle = (options = {}) => {
 
 /**
  * 删除当前选中的对象
- * 支持删除单个对象或多个选中对象（activeSelection）
  */
 const deleteSelected = () => {
   const activeObject = fabricCanvas.getActiveObject()
@@ -500,7 +1154,6 @@ const deleteSelected = () => {
 
 /**
  * 更新当前选中对象的属性
- * @param {Object} props - 要更新的属性键值对
  */
 const updateSelectedObject = (props) => {
   const activeObject = fabricCanvas.getActiveObject()
@@ -508,7 +1161,6 @@ const updateSelectedObject = (props) => {
     activeObject.set(props)
     activeObject.setCoords()
     fabricCanvas.renderAll()
-    // 更新后通知父组件刷新界面
     canvasState.selectedObject = activeObject
     emit('object-selected', activeObject)
   }
@@ -540,26 +1192,20 @@ const sendToBack = () => {
 
 /**
  * 清空画布上所有对象
- * 清空后重置历史记录，使其成为无法撤销的操作
  */
 const clearCanvas = () => {
   fabricCanvas.clear()
   fabricCanvas.backgroundColor = canvasState.backgroundColor
   fabricCanvas.renderAll()
   
-  // 直接设置历史记录为空画布状态，使清空操作无法撤销
-  // 历史记录只有一条（空画布），historyIndex = 0，所以 canUndo = false
   history.value = [JSON.stringify(fabricCanvas.toJSON())]
   historyIndex.value = 0
   
-  // 通知父组件更新撤销/重做按钮状态
   emit('object-modified', null)
 }
 
 /**
  * 将画布导出为图片 DataURL
- * @param {string} format - 图片格式 ('png' | 'jpeg' | 'webp')
- * @returns {string} 图片的 DataURL
  */
 const exportToImage = (format = 'png') => {
   return fabricCanvas.toDataURL({
@@ -570,7 +1216,6 @@ const exportToImage = (format = 'png') => {
 
 /**
  * 获取历史记录状态
- * @returns {Object} { canUndo, canRedo }
  */
 const getHistoryState = () => {
   return {
@@ -583,18 +1228,13 @@ const getHistoryState = () => {
 watch(() => props.currentTool, (newTool) => {
   if (!fabricCanvas) return
   
-  // 退出绘制模式
   fabricCanvas.isDrawingMode = false
-  
-  // 允许所有工具都能选择对象（除了钢笔工具在绘制时）
   fabricCanvas.selection = true
   
-  // 设置所有对象都可选
   fabricCanvas.forEachObject(obj => {
     obj.selectable = true
   })
   
-  // 如果选择钢笔工具，进入自由绘制模式
   if (newTool === ToolType.PEN) {
     fabricCanvas.isDrawingMode = true
     fabricCanvas.freeDrawingBrush.color = props.toolSettings.penColor
@@ -621,12 +1261,10 @@ onMounted(() => {
     initCanvas()
   })
   
-  // 添加窗口 resize 监听
   window.addEventListener('resize', resizeCanvasToContainer)
 })
 
 onUnmounted(() => {
-  // 移除窗口 resize 监听
   window.removeEventListener('resize', resizeCanvasToContainer)
 })
 
@@ -663,6 +1301,10 @@ defineExpose({
   right: 0;
   bottom: 0;
   overflow: hidden;
+}
+
+.canvas-container.edit-mode {
+  cursor: crosshair;
 }
 
 .canvas-element {
