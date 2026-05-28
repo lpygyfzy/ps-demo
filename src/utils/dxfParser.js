@@ -3,6 +3,8 @@
  * 负责将DXF文件转换为Fabric.js对象
  * 支持基本的DXF R12格式
  */
+import { fabric } from 'fabric'
+
 export class DxfParserUtil {
   constructor() {
   }

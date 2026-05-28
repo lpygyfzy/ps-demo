@@ -75,7 +75,7 @@ export class DxfWriterUtil {
   /**
    * 转换矩形
    */
-  convertRect(rect, layer, color) {
+  convertRect(rect, _layer, _color) {
     const { left, top, width, height } = this.getObjectTransform(rect)
     
     const points = [
@@ -91,7 +91,7 @@ export class DxfWriterUtil {
   /**
    * 转换圆形
    */
-  convertCircle(circle, layer, color) {
+  convertCircle(circle, _layer, _color) {
     const { left, top } = this.getObjectTransform(circle)
     const radius = circle.radius * Math.abs(circle.scaleX || 1)
 
@@ -101,7 +101,7 @@ export class DxfWriterUtil {
   /**
    * 转换直线
    */
-  convertLine(line, layer, color) {
+  convertLine(line, _layer, _color) {
     const x1 = line.x1 || 0
     const y1 = line.y1 || 0
     const x2 = line.x2 || 0
@@ -113,7 +113,7 @@ export class DxfWriterUtil {
   /**
    * 转换路径
    */
-  convertPath(path, layer, color) {
+  convertPath(path, _layer, _color) {
     const pathData = path.path
     
     if (!pathData || !Array.isArray(pathData)) {
@@ -165,7 +165,7 @@ export class DxfWriterUtil {
   /**
    * 转换多边形
    */
-  convertPolygon(polygon, layer, color) {
+  convertPolygon(polygon, _layer, _color) {
     const { left, top } = this.getObjectTransform(polygon)
     const scaleX = polygon.scaleX || 1
     const scaleY = polygon.scaleY || 1
@@ -181,7 +181,7 @@ export class DxfWriterUtil {
   /**
    * 转换折线
    */
-  convertPolyline(polyline, layer, color) {
+  convertPolyline(polyline, _layer, _color) {
     const { left, top } = this.getObjectTransform(polyline)
     const scaleX = polyline.scaleX || 1
     const scaleY = polyline.scaleY || 1
@@ -197,7 +197,7 @@ export class DxfWriterUtil {
   /**
    * 转换文本
    */
-  convertText(text, layer, color) {
+  convertText(text, _layer, _color) {
     const { left, top } = this.getObjectTransform(text)
     const fontSize = text.fontSize || 20
 
@@ -207,7 +207,7 @@ export class DxfWriterUtil {
   /**
    * 转换圆弧
    */
-  convertArc(arc, layer, color) {
+  convertArc(arc, _layer, _color) {
     const { left, top } = this.getObjectTransform(arc)
     const radius = arc.radius * Math.abs(arc.scaleX || 1)
     const startAngle = arc.startAngle || 0

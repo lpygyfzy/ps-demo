@@ -41,7 +41,7 @@ export function useTools() {
    * @returns {boolean}
    */
   const isDrawingTool = computed(() => {
-    return [ToolType.RECT, ToolType.CIRCLE, ToolType.PEN].includes(currentTool.value)
+    return [ToolType.RECT, ToolType.CIRCLE, ToolType.PEN, ToolType.TRAPEZOID].includes(currentTool.value)
   })
 
   /**

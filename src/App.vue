@@ -250,7 +250,7 @@ const handleToolChange = (tool) => {
  * 画布初始化完成后的回调
  * @param {fabric.Canvas} canvas - Fabric.js 画布实例
  */
-const handleCanvasReady = (canvas) => {
+const handleCanvasReady = (_canvas) => {
   console.log('Canvas ready')
 }
 
@@ -291,7 +291,7 @@ const handleObjectSelected = (obj) => {
  * 每次对象被移动、旋转、缩放等操作后触发，更新撤销/重做状态
  * @param {fabric.Object} obj - 被修改的对象
  */
-const handleObjectModified = (obj) => {
+const handleObjectModified = (_obj) => {
   updateHistoryState()
 }
 
